@@ -1,6 +1,6 @@
 # Mma.SqlStudio.ApiClient
 
-![Mma.SqlStudio Logo](https://raw.githubusercontent.com/mma1979/sql-editor/main/src/Mma.SqlStudio.ApiClient/icon.png)
+![Mma.SqlStudio Logo](https://raw.githubusercontent.com/mma1979/Mma.SqlStudio.ApiClient/refs/heads/main/src/Mma.SqlStudio.ApiClient/icon.png)
 
 **A modern, highly customizable, embeddable SQL Server Object Explorer and Query Editor for .NET.**
 
@@ -38,6 +38,11 @@ Register the required services in your `Program.cs`. You can customize the studi
 ```csharp
 builder.Services.AddRazorPages();
 
+builder.Services.AddHttpClient("SqlStudioClient", client =>
+{
+    client.BaseAddress = new Uri("https://localhost:7211");
+});
+
 // Add and configure SQL Studio
 builder.Services.AddSqlStudio(options => 
 {
@@ -46,10 +51,10 @@ builder.Services.AddSqlStudio(options =>
     
     options.ApiConfig = new()
     {
-        QueryEndPoint = "https://api.example.com/sql/query",
-        ExecuteEndPoint = "https://api.example.com/sql/execute",
-        SchemaEndPoint = "https://api.example.com/sql/schema",
-        HealthEndpoint = "https://api.example.com/health",
+        QueryEndPoint = "api/sql/query",
+        ExecuteEndPoint = "api/sql/execute",
+        SchemaEndPoint = "api/sql/schema",
+        HealthEndpoint = "api/health",
         AuthHeaders = new Dictionary<string, string>
         {
             { "Authorization", "Bearer your-token" }
@@ -106,33 +111,41 @@ dotnet run
 
 ## 🔌 API Specification
 
-To use `Mma.SqlStudio.ApiClient`, you need a backend API that implements the following endpoints. You can find the full **[OpenAPI Specification (YAML)](src/Mma.SqlStudio.ApiClient/openapi.yaml)** in the repository for easier recreation.
+To use `Mma.SqlStudio.ApiClient`, you need a backend API that implements the following endpoints. You can find the full **[OpenAPI Specification (YAML)](https://raw.githubusercontent.com/mma1979/Mma.SqlStudio.ApiClient/refs/heads/main/src/Mma.SqlStudio.ApiClient/openapi.yaml)** in the repository for easier recreation.
 
 ### 1. Query Endpoint (`POST`)
+
 Used for executing `SELECT` statements.
+
 - **Request Body**: `{ "query": "string" }`
 - **Response**: `QueryResult` object containing rows as a list of dictionaries.
 
 ### 2. Execute Endpoint (`POST`)
+
 Used for statements that modify state (`INSERT`, `UPDATE`, `DELETE`, etc.).
+
 - **Request Body**: `{ "query": "string" }`
 - **Response**: `QueryResult` object (rows usually empty).
 
 ### 3. Schema Endpoint (`GET`)
+
 Returns the database structure.
+
 - **Response**: A hierarchical list of schemas, their categories (Tables, Views), and object names.
 
 ### 4. Health Endpoint (`GET`)
+
 Simple check to verify backend connectivity.
+
 - **Response**: Any `2xx` status code.
 
 ## 📸 Screenshots
 
 **Dark Theme**
-![dark theme](https://raw.githubusercontent.com/mma1979/sql-editor/main/src/Mma.SqlStudio.ApiClient/dark.png)
+![dark theme](https://raw.githubusercontent.com/mma1979/Mma.SqlStudio.ApiClient/refs/heads/main/src/Mma.SqlStudio.ApiClient/dark.png)
 
 **Light Theme**
-![dark theme](https://raw.githubusercontent.com/mma1979/sql-editor/main/src/Mma.SqlStudio.ApiClient/light.png)
+![dark theme](https://raw.githubusercontent.com/mma1979/Mma.SqlStudio.ApiClient/refs/heads/main/src/Mma.SqlStudio.ApiClient/light.png)
 
 ## 📝 License
 

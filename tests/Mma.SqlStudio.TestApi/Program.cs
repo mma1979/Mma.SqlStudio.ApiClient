@@ -27,11 +27,10 @@ builder.Services.AddSqlStudio(options =>
 
     options.ApiConfig = new()
     {
-        // Using full URLs as requested
-        QueryEndPoint = "https://localhost:7211/api/sql/query",
-        ExecuteEndPoint = "https://localhost:7211/api/sql/execute",
-        SchemaEndPoint = "https://localhost:7211/api/sql/schema",
-        HealthEndpoint = "https://localhost:7211/api/sql/health"
+        QueryEndPoint = "api/sql/query",
+        ExecuteEndPoint = "api/sql/execute",
+        SchemaEndPoint = "api/sql/schema",
+        HealthEndpoint = "api/sql/health"
     };
 
     // Example Auth Filter: HTTP Basic Auth (admin:password)
