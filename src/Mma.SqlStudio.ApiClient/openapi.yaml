@@ -1,0 +1,102 @@
+openapi: 3.0.0
+info:
+  title: Mma.SqlStudio Backend API
+  description: API for executing SQL queries, managing schema, and checking health for Mma.SqlStudio.ApiClient.
+  version: 1.0.0
+paths:
+  /sql/query:
+    post:
+      summary: Execute a SQL query (SELECT)
+      description: Use this endpoint for statements that return results (SELECT).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  example: "SELECT * FROM Users"
+      responses:
+        '200':
+          description: Query executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResult'
+  /sql/execute:
+    post:
+      summary: Execute a SQL command (INSERT/UPDATE/DELETE/CREATE/ALTER/DROP)
+      description: Use this endpoint for statements that modify state and do not return result sets.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  example: "UPDATE Users SET Name = 'Alice' WHERE Id = 1"
+      responses:
+        '200':
+          description: Command executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResult'
+  /sql/schema:
+    get:
+      summary: Get database schema
+      description: Returns a hierarchical structure of schemas, tables, and views.
+      responses:
+        '200':
+          description: Schema retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchemaNode'
+  /health:
+    get:
+      summary: Health check
+      description: Simple endpoint to verify the API is up and running.
+      responses:
+        '200':
+          description: API is healthy
+components:
+  schemas:
+    QueryResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        isQuery:
+          type: boolean
+        message:
+          type: string
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    SchemaNode:
+      type: object
+      properties:
+        name:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryNode'
+    CategoryNode:
+      type: object
+      properties:
+        name:
+          type: string
+        objects:
+          type: array
+          items:
+            type: string

@@ -1,0 +1,6 @@
+@Mma.SqlStudio.TestApi_HostAddress = http://localhost:5080
+
+GET {{Mma.SqlStudio.TestApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

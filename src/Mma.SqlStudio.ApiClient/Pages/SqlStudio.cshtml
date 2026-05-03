@@ -1,0 +1,144 @@
+@page "/sql-studio"
+@using Microsoft.Extensions.Options
+@using Mma.SqlStudio.ApiClient.Models
+@inject IOptions<SqlStudioOptions> SqlStudioOptions
+@model Mma.SqlStudio.ApiClient.Pages.SqlStudioModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@SqlStudioOptions.Value.AppName</title>
+    <!-- We reference bootstrap icons natively -->
+    <link rel="stylesheet" href="~/_content/Mma.SqlStudio.ApiClient/css/bootstrap-icons/bootstrap-icons.css" />
+    <link rel="stylesheet" href="~/_content/Mma.SqlStudio.ApiClient/css/sqlstudio.css" />
+</head>
+<body>
+    <div class="page @(SqlStudioOptions.Value.Theme.Equals("Light", StringComparison.OrdinalIgnoreCase) ? "theme-light" : "")">
+        <div class="top-bar">
+            <button class="icon-btn toggle-sidebar" id="btn-toggle-sidebar" title="Toggle Object Explorer" @(!SqlStudioOptions.Value.EnableSchemaLoad ? "disabled" : "")>
+                <i class="bi bi-layout-sidebar-inset"></i>
+            </button>
+            <div class="brand">
+                <span class="logo"></span>
+                <span class="app-name">@SqlStudioOptions.Value.AppName</span>
+            </div>
+            <div class="top-actions">
+                <button class="icon-btn" id="btn-toggle-theme" title="Toggle Theme">
+                    <i class="bi @(SqlStudioOptions.Value.Theme.Equals("Light", StringComparison.OrdinalIgnoreCase) ? "bi-moon-fill" : "bi-sun-fill")" id="theme-icon"></i>
+                </button>
+                <button class="primary" id="btn-run" disabled>
+                    <i class="bi bi-play-fill" id="run-icon"></i>
+                    <span class="spinner-border spinner-border-sm mr-2" id="run-spinner" style="display:none;"></span>
+                    Run
+                </button>
+                <button class="secondary" id="btn-save"><i class="bi bi-download"></i> Save</button>
+            </div>
+        </div>
+
+        <main>
+            <div class="workspace">
+                <!-- Sidebar -->
+                <div class="sidebar @(!SqlStudioOptions.Value.EnableSchemaLoad ? "collapsed" : "")" id="sidebar">
+                    <div class="sidebar-header">
+                        <span class="title"><i class="bi bi-database"></i> Object Explorer</span>
+                        <div class="actions">
+                            <i class="bi bi-arrow-clockwise" id="btn-refresh-schema" title="Refresh"></i>
+                            <i class="bi bi-plus-slash-minus" id="btn-collapse-all" title="Collapse All"></i>
+                        </div>
+                    </div>
+                    <div class="search-box">
+                        <i class="bi bi-search"></i>
+                        <input type="text" id="schema-search" placeholder="Filter objects..." spellcheck="false" />
+                    </div>
+                    <div class="tree-view" id="schema-tree">
+                        <!-- Schema nodes will be injected here via JS -->
+                    </div>
+                </div>
+                <!-- /Sidebar -->
+
+                <div class="main-content">
+                    <div class="editor-section">
+                        <!-- SqlEditor -->
+                        <div class="editor-container">
+                            <div class="tabs" id="editor-tabs">
+                                <!-- Tabs injected via JS -->
+                                <div class="add-tab" id="btn-add-tab">
+                                    <i class="bi bi-plus"></i>
+                                </div>
+                            </div>
+                            
+                            <div class="editor-pane">
+                                <div id="editor-content-wrapper" style="display: flex; flex: 1; position: relative;">
+                                    <div class="line-numbers" id="line-numbers"></div>
+                                    <div class="code-area-wrapper">
+                                        <div class="highlight-layer code-md" id="highlight-layer"></div>
+                                        <textarea id="code-editor" class="code-editor code-md" spellcheck="false"></textarea>
+                                    </div>
+                                    <div class="editor-actions">
+                                        <button class="secondary" id="btn-format"><i class="bi bi-text-left"></i> Format</button>
+                                        <button class="secondary" id="btn-copy"><i class="bi bi-copy"></i> <span id="copy-text">Copy</span></button>
+                                    </div>
+                                </div>
+                                <div id="empty-editor" class="empty-editor" style="display: none;">
+                                    <i class="bi bi-file-earmark-code" style="font-size: 48px; color: var(--outline-variant)"></i>
+                                    <span class="body-md on-surface-variant">No files open. Double-click an object in the explorer to view its script.</span>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- /SqlEditor -->
+                    </div>
+                    <div class="results-section">
+                        <!-- ResultsGrid -->
+                        <div class="results-container">
+                            <div class="results-toolbar">
+                                <div class="toolbar-left" id="results-messages">
+                                    <i class="bi bi-info-circle"></i> Ready
+                                </div>
+                                <div class="toolbar-right">
+                                    <button class="icon-btn" title="Export CSV" id="btn-export-csv"><i class="bi bi-filetype-csv"></i></button>
+                                </div>
+                            </div>
+                            <div class="grid-wrapper">
+                                <table class="data-grid" id="results-table">
+                                    <thead id="results-thead">
+                                    </thead>
+                                    <tbody id="results-tbody">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <!-- /ResultsGrid -->
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <div class="status-bar">
+            <div class="status-left">
+                <span class="status-item" id="connection-status">
+                    <i class="bi bi-circle-fill" id="health-indicator" style="color: var(--outline-variant); font-size: 8px; margin-right: 4px;"></i>
+                    <span id="connection-text">Checking...</span>
+                </span>
+                <span class="status-item">API Client</span>
+            </div>
+            <div class="status-right">
+                <span class="status-item">UTF-8</span>
+                <span class="status-item" id="status-rows-count">0 Rows</span>
+                <span class="status-item" id="status-state">READY</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script>
+        window.SqlStudioApiUrl = '/api/@SqlStudioOptions.Value.Route.TrimStart('/')';
+        window.EnableSchemaLoad = @SqlStudioOptions.Value.EnableSchemaLoad.ToString().ToLower();
+    </script>
+    <script src="~/_content/Mma.SqlStudio.ApiClient/js/sqlstudio.js"></script>
+    <script src="~/_content/Mma.SqlStudio.ApiClient/js/fileHelper.js"></script>
+</body>
+</html>

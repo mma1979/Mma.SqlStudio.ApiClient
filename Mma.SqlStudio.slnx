@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Mma.SqlStudio.ApiClient/Mma.SqlStudio.ApiClient.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Mma.SqlStudio.TestApi/Mma.SqlStudio.TestApi.csproj" Id="09aa3b7f-163b-4d4b-b474-b99be7a82baa" />
+  </Folder>
+</Solution>
