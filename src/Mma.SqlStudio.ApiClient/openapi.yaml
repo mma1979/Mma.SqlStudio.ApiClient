@@ -18,6 +18,10 @@ paths:
                 query:
                   type: string
                   example: "SELECT * FROM Users"
+                cookies:
+                  type: string
+                localStorage:
+                  type: string
       responses:
         '200':
           description: Query executed successfully
@@ -25,6 +29,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/QueryResult'
+  /sql/history:
+    get:
+      summary: Get query history
+      description: Returns a list of recently executed queries and browser metadata.
+      responses:
+        '200':
+          description: History retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HistoryItem'
+                  tableName:
+                    type: string
   /sql/execute:
     post:
       summary: Execute a SQL command (INSERT/UPDATE/DELETE/CREATE/ALTER/DROP)
@@ -39,6 +61,10 @@ paths:
                 query:
                   type: string
                   example: "UPDATE Users SET Name = 'Alice' WHERE Id = 1"
+                cookies:
+                  type: string
+                localStorage:
+                  type: string
       responses:
         '200':
           description: Command executed successfully
@@ -100,3 +126,15 @@ components:
           type: array
           items:
             type: string
+    HistoryItem:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        query:
+          type: string
+        cookies:
+          type: string
+        localStorage:
+          type: string

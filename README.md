@@ -18,7 +18,8 @@ Mma.SqlStudio.ApiClient is packaged as a Razor Class Library (RCL), making it in
 - ✍️ **Query Editor**: Execute queries with full syntax highlighting and a responsive results grid.
 - 🎨 **Modern UI**: Clean, responsive, and dynamic interface built with vanilla CSS. Dark and Light mode supported!
 - 🔌 **Embeddable**: Drop into any ASP.NET Core application via Minimal APIs and Razor Pages in just a few lines of code.
-- ⚙️ **Highly Configurable**: Control routing, application naming, default connections, and schema loading.
+- ⚙️ **Highly Configurable**: Control routing, application naming, and schema loading.
+- 🕒 **Query History**: Dedicated sidebar tab for query history, including browser metadata (cookies/localStorage) and easy script re-execution.
 - 🔒 **Customizable Authorization**: Secure your SQL Studio instance by applying custom endpoint and page authorization filters, including built-in support for HTTP Basic Auth or your own custom logic.
 
 ## 🚀 Getting Started
@@ -28,7 +29,7 @@ Mma.SqlStudio.ApiClient is packaged as a Razor Class Library (RCL), making it in
 Add the package to your project using the .NET CLI:
 
 ```bash
-dotnet add package Mma.SqlStudio.ApiClient --version 1.3.1
+dotnet add package Mma.SqlStudio.ApiClient --version 1.4.1
 ```
 
 ### 2. Configure Services
@@ -84,6 +85,11 @@ builder.Services.AddSqlStudio(options =>
         return false;
     };
     
+    // History Configuration
+    options.AllowHistoryLog = true;
+    options.HistoryTableName = "__SqlStudioQueryHistory";
+    options.CreateTable = true; // Auto-provision history table
+    
     // Set to null to return 401 Unauthorized instead of redirecting
     // Alternatively, provide a path like "/access-denied" to redirect rejected requests
     options.UnauthorizedRedirectUrl = null;
@@ -117,17 +123,23 @@ To use `Mma.SqlStudio.ApiClient`, you need a backend API that implements the fol
 
 Used for executing `SELECT` statements.
 
-- **Request Body**: `{ "query": "string" }`
+- **Request Body**: `{ "query": "string", "cookies": "string", "localStorage": "string" }`
 - **Response**: `QueryResult` object containing rows as a list of dictionaries.
 
 ### 2. Execute Endpoint (`POST`)
 
 Used for statements that modify state (`INSERT`, `UPDATE`, `DELETE`, etc.).
 
-- **Request Body**: `{ "query": "string" }`
+- **Request Body**: `{ "query": "string", "cookies": "string", "localStorage": "string" }`
 - **Response**: `QueryResult` object (rows usually empty).
 
-### 3. Schema Endpoint (`GET`)
+### 3. History Endpoint (`GET`)
+
+Retrieves query history.
+
+- **Response**: `{ "items": [HistoryItem], "tableName": "string" }`
+
+### 4. Schema Endpoint (`GET`)
 
 Returns the database structure.
 

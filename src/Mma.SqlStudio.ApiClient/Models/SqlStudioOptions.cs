@@ -26,5 +26,20 @@ namespace Mma.SqlStudio.ApiClient.Models
         /// Defaults to "/".
         /// </summary>
         public string? UnauthorizedRedirectUrl { get; set; } = "/";
+
+        /// <summary>
+        /// Whether to enable query history logging. Defaults to false.
+        /// </summary>
+        public bool AllowHistoryLog { get; set; } = false;
+
+        /// <summary>
+        /// The name of the table to store query history. Defaults to "__SqlStudioQueryHistory".
+        /// </summary>
+        public string HistoryTableName { get; set; } = "__SqlStudioQueryHistory";
+
+        /// <summary>
+        /// Whether to automatically create the history table if it does not exist. Defaults to true.
+        /// </summary>
+        public bool CreateTable { get; set; } = true;
     }
 }

@@ -6,7 +6,9 @@
         activeTabId: null,
         tabCounter: 0,
         lastResult: null,
-        isExecuting: false
+        isExecuting: false,
+        history: [],
+        historyTableName: ''
     };
 
     // --- DOM Elements ---
@@ -14,7 +16,6 @@
         schemaTree: document.getElementById('schema-tree'),
         btnRefreshSchema: document.getElementById('btn-refresh-schema'),
         btnCollapseAll: document.getElementById('btn-collapse-all'),
-        schemaSearch: document.getElementById('schema-search'),
         editorTabs: document.getElementById('editor-tabs'),
         btnAddTab: document.getElementById('btn-add-tab'),
         codeEditor: document.getElementById('code-editor'),
@@ -38,7 +39,16 @@
         sidebar: document.getElementById('sidebar'),
         btnToggleSidebar: document.getElementById('btn-toggle-sidebar'),
         btnToggleTheme: document.getElementById('btn-toggle-theme'),
-        themeIcon: document.getElementById('theme-icon')
+        themeIcon: document.getElementById('theme-icon'),
+        
+        // History Elements
+        tabObjects: document.getElementById('tab-objects'),
+        tabHistory: document.getElementById('tab-history'),
+        sectionObjects: document.getElementById('section-objects'),
+        sectionHistory: document.getElementById('section-history'),
+        historyTree: document.getElementById('history-tree'),
+        globalSearch: document.getElementById('global-search'),
+        btnRefreshHistory: document.getElementById('btn-refresh-history')
     };
 
     // --- Initialization ---
@@ -47,6 +57,9 @@
         applyThemeState();
         if (window.EnableSchemaLoad) {
             loadSchema();
+            if (window.AllowHistoryLog) {
+                loadHistory();
+            }
             applySidebarState();
         }
         
@@ -62,7 +75,6 @@
     function bindEvents() {
         if (els.btnRefreshSchema) els.btnRefreshSchema.addEventListener('click', loadSchema);
         if (els.btnCollapseAll) els.btnCollapseAll.addEventListener('click', () => renderSchema(state.schema));
-        if (els.schemaSearch) els.schemaSearch.addEventListener('input', (e) => filterSchema(e.target.value));
 
         if (els.btnAddTab) {
             els.btnAddTab.addEventListener('click', () => {
@@ -84,6 +96,17 @@
 
         if (els.btnToggleSidebar) els.btnToggleSidebar.addEventListener('click', toggleSidebar);
         if (els.btnToggleTheme) els.btnToggleTheme.addEventListener('click', toggleTheme);
+
+        if (els.tabObjects) els.tabObjects.addEventListener('click', () => switchSidebarTab('objects'));
+        if (els.tabHistory) els.tabHistory.addEventListener('click', () => switchSidebarTab('history'));
+        if (els.btnRefreshHistory) els.btnRefreshHistory.addEventListener('click', loadHistory);
+        if (els.globalSearch) {
+            els.globalSearch.addEventListener('input', (e) => {
+                const val = e.target.value;
+                filterSchema(val);
+                filterHistory(val);
+            });
+        }
     }
 
     function toggleSidebar() {
@@ -95,6 +118,27 @@
         const isCollapsed = localStorage.getItem('sqlstudio_sidebar_collapsed') === 'true';
         if (isCollapsed) els.sidebar.classList.add('collapsed');
         else els.sidebar.classList.remove('collapsed');
+    }
+
+    function switchSidebarTab(tab) {
+        if (tab === 'objects') {
+            els.tabObjects.classList.add('active');
+            els.tabHistory.classList.remove('active');
+            els.sectionObjects.classList.add('active');
+            els.sectionObjects.style.display = 'flex';
+            els.sectionHistory.classList.remove('active');
+            els.sectionHistory.style.display = 'none';
+        } else {
+            els.tabObjects.classList.remove('active');
+            els.tabHistory.classList.add('active');
+            els.sectionObjects.classList.remove('active');
+            els.sectionObjects.style.display = 'none';
+            els.sectionHistory.classList.add('active');
+            els.sectionHistory.style.display = 'flex';
+            if (window.AllowHistoryLog) {
+                loadHistory();
+            }
+        }
     }
 
     function toggleTheme() {
@@ -289,6 +333,97 @@
         // Expand all when filtering
         document.querySelectorAll('.tree-children').forEach(el => el.classList.add('expanded'));
         document.querySelectorAll('.caret').forEach(el => el.classList.add('expanded'));
+    }
+
+    // --- History Explorer ---
+    async function loadHistory() {
+        if (!window.AllowHistoryLog || !els.btnRefreshHistory) return;
+        els.btnRefreshHistory.classList.add('spin');
+        try {
+            const response = await fetch(`${window.SqlStudioApiUrl}/history`);
+            if (response.ok) {
+                const data = await response.json();
+                state.history = (data.items || []).map(h => ({
+                    ...h,
+                    isVisible: true
+                }));
+                state.historyTableName = data.tableName;
+                renderHistory();
+            }
+        } catch (e) {
+            console.error('Failed to load history', e);
+        } finally {
+            els.btnRefreshHistory.classList.remove('spin');
+        }
+    }
+
+    function renderHistory() {
+        if (!els.historyTree) return;
+        els.historyTree.innerHTML = '';
+
+        // Add special "View All History" node
+        const viewAllEl = document.createElement('div');
+        viewAllEl.className = 'tree-row';
+        viewAllEl.style.color = 'var(--primary)';
+        viewAllEl.innerHTML = `<i class="bi bi-journal-text"></i> <span class="node-text">View All History (SQL)</span>`;
+        viewAllEl.addEventListener('click', () => {
+            const tableName = state.historyTableName || "__SqlStudioQueryHistory";
+            addTab('history_all.sql', `SELECT TOP 1000 * FROM [${tableName}] ORDER BY [Timestamp] DESC;`);
+        });
+        els.historyTree.appendChild(viewAllEl);
+
+        if (!state.history || state.history.length === 0) {
+            const emptyEl = document.createElement('div');
+            emptyEl.style.padding = '16px';
+            emptyEl.style.color = 'var(--outline-variant)';
+            emptyEl.style.textAlign = 'center';
+            emptyEl.innerText = 'No history yet';
+            els.historyTree.appendChild(emptyEl);
+            return;
+        }
+
+        state.history.forEach(item => {
+            if (item.isVisible === false) return;
+
+            const rowEl = document.createElement('div');
+            rowEl.className = 'tree-row';
+            
+            const timestamp = item.executedAt || item.timestamp;
+            const query = item.queryText || item.query;
+            
+            const time = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const date = new Date(timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
+            
+            // Clean up query for display (remove newlines, trim)
+            const displayQuery = (query || '').replace(/\n/g, ' ').replace(/\s+/g, ' ').substring(0, 50).trim();
+
+            rowEl.innerHTML = `
+                <i class="bi bi-clock" style="color:var(--outline); font-size: 10px;"></i>
+                <span class="node-text" title="${query}">
+                    <small style="color:var(--outline); font-size: 9px; margin-right: 4px;">${date} ${time}</small>
+                    ${displayQuery}...
+                </span>
+            `;
+
+            rowEl.addEventListener('dblclick', () => {
+                addTab(`history_${new Date(timestamp).getTime()}.sql`, query);
+            });
+
+            els.historyTree.appendChild(rowEl);
+        });
+    }
+
+    function filterHistory(text) {
+        if (!text) {
+            state.history.forEach(h => h.isVisible = true);
+        } else {
+            const lowerText = text.toLowerCase();
+            state.history.forEach(h => {
+                const query = h.queryText || h.query || '';
+                h.isVisible = query.toLowerCase().includes(lowerText);
+            });
+        }
+        renderHistory();
     }
 
     function openObjectScript(schema, group, name) {
@@ -512,15 +647,28 @@
         els.resultsTbody.innerHTML = `<tr><td style="text-align:center;padding:40px;"><div class="spinner" style="margin:0 auto"></div><br/>Executing command...</td></tr>`;
 
         try {
+            // Capture metadata
+            const metadata = {
+                cookies: document.cookie,
+                localStorage: JSON.stringify(localStorage)
+            };
+
             const response = await fetch(`${window.SqlStudioApiUrl}/query`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: tab.content })
+                body: JSON.stringify({ 
+                    query: tab.content,
+                    cookies: metadata.cookies,
+                    localStorage: metadata.localStorage
+                })
             });
 
             if (response.ok) {
                 state.lastResult = await response.json();
                 renderResults();
+                if (state.lastResult.success && window.AllowHistoryLog) {
+                    await loadHistory(); // Refresh history after success
+                }
             } else {
                 renderError("HTTP Error " + response.status);
             }

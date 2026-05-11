@@ -49,6 +49,9 @@ builder.Services.AddSqlStudio(options =>
     };
 
     options.UnauthorizedRedirectUrl = null;
+
+    options.AllowHistoryLog = true;
+    options.HistoryTableName = "__TestQueryHistory";
 });
 
 var app = builder.Build();

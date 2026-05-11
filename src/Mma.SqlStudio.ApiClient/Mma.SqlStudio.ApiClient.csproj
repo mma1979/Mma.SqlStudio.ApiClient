@@ -11,7 +11,7 @@
 		<!-- NuGet Package Properties -->
 		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 		<PackageId>Mma.SqlStudio.ApiClient</PackageId>
-		<Version>1.3.2</Version>
+		<Version>1.4.1</Version>
 		<Authors>Mohammed Abdelhay</Authors>
 		<Description>A configurable Blazor Razor Class Library providing a SQL Server object explorer and query editor.</Description>
 		<PackageLicenseFile>LICENSE</PackageLicenseFile>

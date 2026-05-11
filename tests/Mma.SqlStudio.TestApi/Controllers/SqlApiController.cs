@@ -138,6 +138,8 @@ namespace Mma.SqlStudio.TestApi.Controllers
         public class QueryRequest
         {
             public string Query { get; set; } = "";
+            public string? Cookies { get; set; }
+            public string? LocalStorage { get; set; }
         }
 
         public class QueryResult

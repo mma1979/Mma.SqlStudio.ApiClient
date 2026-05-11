@@ -3,4 +3,20 @@
 GET {{Mma.SqlStudio.TestApi_HostAddress}}/weatherforecast/
 Accept: application/json
 
-###
+### Get Schema
+GET {{Mma.SqlStudio.TestApi_HostAddress}}/api/sql/schema
+Accept: application/json
+
+### Execute Query
+POST {{Mma.SqlStudio.TestApi_HostAddress}}/api/sql/query
+Content-Type: application/json
+
+{
+  "query": "SELECT TOP 10 * FROM INFORMATION_SCHEMA.TABLES",
+  "cookies": "test_cookie=123",
+  "localStorage": "{\"theme\":\"dark\"}"
+}
+
+### Get History (via Proxy)
+GET {{Mma.SqlStudio.TestApi_HostAddress}}/script-runner/api/history
+Accept: application/json

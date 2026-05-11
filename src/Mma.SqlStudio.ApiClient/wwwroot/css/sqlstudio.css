@@ -504,6 +504,50 @@ main {
     color: var(--on-surface);
 }
 
+.sidebar-tabs {
+    display: flex;
+    background-color: var(--surface-container-lowest);
+    border-bottom: 1px solid var(--outline-variant);
+    height: 40px;
+    flex-shrink: 0;
+}
+
+.sidebar-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--on-surface-variant);
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s;
+}
+
+.sidebar-tab:hover {
+    background-color: var(--surface-container-low);
+    color: var(--on-surface);
+}
+
+.sidebar-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+    background-color: var(--surface-container-low);
+}
+
+.sidebar-section {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+}
+
+.sidebar-section.active {
+    display: flex;
+}
+
 .sidebar-header {
     height: 40px;
     display: flex;

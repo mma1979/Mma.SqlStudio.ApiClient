@@ -43,19 +43,45 @@
             <div class="workspace">
                 <!-- Sidebar -->
                 <div class="sidebar @(!SqlStudioOptions.Value.EnableSchemaLoad ? "collapsed" : "")" id="sidebar">
-                    <div class="sidebar-header">
-                        <span class="title"><i class="bi bi-database"></i> Object Explorer</span>
-                        <div class="actions">
-                            <i class="bi bi-arrow-clockwise" id="btn-refresh-schema" title="Refresh"></i>
-                            <i class="bi bi-plus-slash-minus" id="btn-collapse-all" title="Collapse All"></i>
-                        </div>
+                    <div class="sidebar-tabs">
+                        <button class="sidebar-tab active" id="tab-objects" title="Object Explorer">
+                            <i class="bi bi-database"></i>
+                        </button>
+                        <button class="sidebar-tab" id="tab-history" title="Query History">
+                            <i class="bi bi-clock-history"></i>
+                        </button>
                     </div>
+
                     <div class="search-box">
                         <i class="bi bi-search"></i>
-                        <input type="text" id="schema-search" placeholder="Filter objects..." spellcheck="false" />
+                        <input type="text" id="global-search" placeholder="Search objects or history..." spellcheck="false" />
                     </div>
-                    <div class="tree-view" id="schema-tree">
-                        <!-- Schema nodes will be injected here via JS -->
+
+                    <!-- Object Explorer Section -->
+                    <div class="sidebar-section active" id="section-objects">
+                        <div class="sidebar-header">
+                            <span class="title">Object Explorer</span>
+                            <div class="actions">
+                                <i class="bi bi-arrow-clockwise" id="btn-refresh-schema" title="Refresh"></i>
+                                <i class="bi bi-plus-slash-minus" id="btn-collapse-all" title="Collapse All"></i>
+                            </div>
+                        </div>
+                        <div class="tree-view" id="schema-tree">
+                            <!-- Schema nodes will be injected here via JS -->
+                        </div>
+                    </div>
+
+                    <!-- History Section -->
+                    <div class="sidebar-section" id="section-history" style="display: none;">
+                        <div class="sidebar-header">
+                            <span class="title">Query History</span>
+                            <div class="actions">
+                                <i class="bi bi-arrow-clockwise" id="btn-refresh-history" title="Refresh"></i>
+                            </div>
+                        </div>
+                        <div class="tree-view" id="history-tree">
+                            <!-- History nodes will be injected here via JS -->
+                        </div>
                     </div>
                 </div>
                 <!-- /Sidebar -->
@@ -135,8 +161,9 @@
 
     <!-- Scripts -->
     <script>
-        window.SqlStudioApiUrl = '/api/@SqlStudioOptions.Value.Route.TrimStart('/')';
+        window.SqlStudioApiUrl = '@Url.Content("~/")api/@SqlStudioOptions.Value.Route.TrimStart('/')'.replace(/\/+$/, '');
         window.EnableSchemaLoad = @SqlStudioOptions.Value.EnableSchemaLoad.ToString().ToLower();
+        window.AllowHistoryLog = @SqlStudioOptions.Value.AllowHistoryLog.ToString().ToLower();
     </script>
     <script src="~/_content/Mma.SqlStudio.ApiClient/js/sqlstudio.js"></script>
     <script src="~/_content/Mma.SqlStudio.ApiClient/js/fileHelper.js"></script>
