@@ -19,6 +19,7 @@ Mma.SqlStudio.ApiClient is a Razor Class Library (RCL) that allows you to easily
 - 🎨 **Modern UI**: Clean, responsive, and dynamic interface built with vanilla CSS. Dark and Light mode supported!
 - 🔌 **Embeddable**: Drop into any ASP.NET Core application via Minimal APIs and Razor Pages in just a few lines of code.
 - ⚙️ **Highly Configurable**: Control routing, application naming, and schema loading.
+- 🕒 **Query History**: Dedicated sidebar tab for query history, including browser metadata (cookies/localStorage) and easy script re-execution.
 - 🔒 **Customizable Authorization**: Secure your SQL Studio instance by applying custom endpoint and page authorization filters, including built-in support for HTTP Basic Auth.
 
 ## 🚀 Getting Started
@@ -28,7 +29,7 @@ Mma.SqlStudio.ApiClient is a Razor Class Library (RCL) that allows you to easily
 Add the package to your project using the .NET CLI:
 
 ```bash
-dotnet add package Mma.SqlStudio.ApiClient --version 1.3.2
+dotnet add package Mma.SqlStudio.ApiClient --version 1.4.1
 ```
 
 ### 2. Configure Services
@@ -85,6 +86,11 @@ builder.Services.AddSqlStudio(options =>
         return false;
     };
     
+    // History Configuration
+    options.AllowHistoryLog = true;
+    options.HistoryTableName = "__SqlStudioQueryHistory";
+    options.CreateTable = true; // Auto-provision history table
+    
     // Set to null to return 401 Unauthorized instead of redirecting
     options.UnauthorizedRedirectUrl = null;
 });
@@ -126,13 +132,17 @@ All query/execute endpoints should return a `QueryResult` object:
 
 ### 1. Query Endpoint (`POST`)
 Used for `SELECT` statements.
-- **Request**: `{ "query": "string" }`
+- **Request**: `{ "query": "string", "cookies": "string", "localStorage": "string" }`
 - **Response**: `QueryResult` (rows populated)
 
 ### 2. Execute Endpoint (`POST`)
 Used for `INSERT`, `UPDATE`, `DELETE`, etc.
-- **Request**: `{ "query": "string" }`
+- **Request**: `{ "query": "string", "cookies": "string", "localStorage": "string" }`
 - **Response**: `QueryResult` (rows usually empty)
+
+### 3. History Endpoint (`GET`)
+Retrieves query history.
+- **Response**: `{ "items": [HistoryItem], "tableName": "string" }`
 
 ### 3. Schema Endpoint (`GET`)
 Returns the database structure.
