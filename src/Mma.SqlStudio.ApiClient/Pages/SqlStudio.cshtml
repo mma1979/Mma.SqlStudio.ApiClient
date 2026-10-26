@@ -164,6 +164,11 @@
         window.SqlStudioApiUrl = '@Url.Content("~/")api/@SqlStudioOptions.Value.Route.TrimStart('/')'.replace(/\/+$/, '');
         window.EnableSchemaLoad = @SqlStudioOptions.Value.EnableSchemaLoad.ToString().ToLower();
         window.AllowHistoryLog = @SqlStudioOptions.Value.AllowHistoryLog.ToString().ToLower();
+        window.SqlStudioExcludedSchemas = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(SqlStudioOptions.Value.ExcludedSchemas));
+        window.SqlStudioExcludedObjects = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(SqlStudioOptions.Value.ExcludedObjects));
+        window.SqlStudioEncryptionEnabled = @SqlStudioOptions.Value.Encryption.Enabled.ToString().ToLower();
+        window.SqlStudioBackendPublicKeyJwk = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(SqlStudioOptions.Value.Encryption.BackendPublicKeyJwk));
+        window.SqlStudioBackendKeyId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(SqlStudioOptions.Value.Encryption.BackendKeyId));
     </script>
     <script src="~/_content/Mma.SqlStudio.ApiClient/js/sqlstudio.js"></script>
     <script src="~/_content/Mma.SqlStudio.ApiClient/js/fileHelper.js"></script>

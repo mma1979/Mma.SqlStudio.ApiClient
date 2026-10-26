@@ -3,6 +3,9 @@ namespace Mma.SqlStudio.ApiClient.Models
     public class SqlStudioOptions
     {
         public ApiConfig ApiConfig { get; set; } = new();
+
+        /// <summary>Optional browser-to-backend encryption settings. Disabled by default.</summary>
+        public EndToEndEncryptionOptions Encryption { get; set; } = new();
         public string Route { get; set; } = "/sql-studio";
         public string AppName { get; set; } = "Mma SQL Studio";
         public bool EnableSchemaLoad { get; set; } = true;

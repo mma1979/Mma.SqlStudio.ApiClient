@@ -36,6 +36,12 @@ namespace Mma.SqlStudio.ApiClient.Models
         public string SchemaEndPoint { get; set; } = "";
 
         /// <summary>
+        /// Backend endpoint for encrypted history operations when E2EE is enabled.
+        /// It must accept the same encrypted-envelope protocol as the query endpoint.
+        /// </summary>
+        public string HistoryEndPoint { get; set; } = "";
+
+        /// <summary>
         /// Optional. Dictionary of authentication headers to send with each request.
         /// Example: { "Authorization", "Bearer ..." }
         /// </summary>

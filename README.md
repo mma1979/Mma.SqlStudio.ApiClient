@@ -19,8 +19,9 @@ Mma.SqlStudio.ApiClient is a Razor Class Library (RCL) that allows you to easily
 - 🎨 **Modern UI**: Clean, responsive, and dynamic interface built with vanilla CSS. Dark and Light mode supported!
 - 🔌 **Embeddable**: Drop into any ASP.NET Core application via Minimal APIs and Razor Pages in just a few lines of code.
 - ⚙️ **Highly Configurable**: Control routing, application naming, and schema loading.
-- 🕒 **Query History**: Dedicated sidebar tab for query history, including browser metadata (cookies/localStorage) and easy script re-execution.
+- 🕒 **Query History**: Dedicated sidebar tab for query history and easy script re-execution; browser metadata is sent only when E2EE is disabled.
 - 🔒 **Customizable Authorization**: Secure your SQL Studio instance by applying custom endpoint and page authorization filters, including built-in support for HTTP Basic Auth.
+- 🔐 **Optional end-to-end encryption**: Encrypt query, schema, and history payloads in the browser for a backend that implements the documented E2EE protocol. Disabled by default.
 
 ## 🚀 Getting Started
 
@@ -29,7 +30,7 @@ Mma.SqlStudio.ApiClient is a Razor Class Library (RCL) that allows you to easily
 Add the package to your project using the .NET CLI:
 
 ```bash
-dotnet add package Mma.SqlStudio.ApiClient --version 1.4.1
+dotnet add package Mma.SqlStudio.ApiClient --version 1.5.0
 ```
 
 ### 2. Configure Services
@@ -95,6 +96,122 @@ builder.Services.AddSqlStudio(options =>
     options.UnauthorizedRedirectUrl = null;
 });
 ```
+
+### End-to-End Encryption (E2EE)
+
+#### What it does
+
+E2EE is **off by default** (`options.Encryption.Enabled` defaults to `false`). When enabled, the browser encrypts query/execute requests, schema requests, history operations, and their responses before they pass through the SqlStudio proxy. The proxy forwards ciphertext without parsing or decrypting it. The configured backend is the cryptographic endpoint: it decrypts requests to execute SQL and encrypts the response for the browser.
+
+E2EE requires HTTPS (and a secure browser context with Web Crypto). It does not replace application authorization, backend authentication, TLS, or careful protection of the page and its scripts. Health checks remain ordinary unencrypted GET requests. Authentication headers configured in `ApiConfig.AuthHeaders` are server-to-backend credentials, not part of the E2EE payload.
+
+E2EE does **not** hide data from the backend: the backend must see SQL to execute it, and may see results and history. It does not encrypt database history at rest. The browser displays decrypted values, so XSS, compromised scripts/browser, or a compromised backend can expose them. If the SqlStudio proxy and backend share a process, server, or access to the backend private key, that deployment does not provide confidentiality from that host. This protocol version also does not provide forward secrecy: later compromise of the RSA private key may expose archived request envelopes.
+
+In E2EE mode the browser does not send `document.cookie` or `localStorage` as history metadata. History query text is sent in encrypted `history.append` requests and is stored by the backend. Excluded schema/object lists are encrypted client hints; enforce actual data access restrictions in the backend, not in UI filters.
+
+#### 1. Configure the package
+
+Obtain the backend's **public RSA JWK** through a trusted deployment/configuration channel. Keep the matching private key only on the backend. Use an RSA key of at least 2048 bits; the public JWK must contain `kty` (`RSA`), base64url `n` and `e`, and be usable for `RSA-OAEP-256` encryption. Set a key ID that uniquely identifies that key. Never place private JWK members (such as `d`, `p`, or `q`) in package options, browser configuration, source control, or logs.
+
+Add the following inside the `AddSqlStudio(options => { ... })` callback from the setup example above. Use the real public JWK from your backend; the placeholder below is not a usable key:
+
+```csharp
+options.Encryption.Enabled = true;
+options.Encryption.BackendKeyId = "sql-api-key-2026-01";
+options.Encryption.BackendPublicKeyJwk = """{"kty":"RSA","n":"<base64url-encoded-modulus>","e":"AQAB","alg":"RSA-OAEP-256","ext":true,"key_ops":["encrypt"]}""";
+
+// Required when AllowHistoryLog is true.
+options.ApiConfig.HistoryEndPoint = "api/sql/history";
+```
+
+The same public key and key ID must correspond to a private key accepted by the configured backend. E2EE startup validation requires the key ID, a valid public RSA JWK, and `QueryEndPoint`; it also requires `SchemaEndPoint` when schema loading is enabled and `HistoryEndPoint` when history is enabled. With E2EE on, `QueryEndPoint` is a unified encrypted endpoint for **all** SQL statements, including mutations; `ExecuteEndPoint` is not used. Schema and history requests use POST in this mode. The health endpoint remains GET.
+
+For configuration-driven setup, put the public JWK and key ID in trusted application configuration and bind `SqlStudioOptions` with `builder.Services.AddSqlStudio(builder.Configuration)`. The public key itself is not secret, but its integrity is essential: an attacker who can replace the configured key or modify the page can undermine the trust relationship. Example `appsettings.json` structure (replace the JWK placeholder with the serialized public key):
+
+```json
+{
+  "SqlStudio": {
+    "AllowHistoryLog": true,
+    "Encryption": {
+      "Enabled": true,
+      "BackendKeyId": "sql-api-key-2026-01",
+      "BackendPublicKeyJwk": "<serialized public RSA JWK>"
+    },
+    "ApiConfig": {
+      "QueryEndPoint": "api/sql/query",
+      "SchemaEndPoint": "api/sql/schema",
+      "HistoryEndPoint": "api/sql/history",
+      "HealthEndpoint": "api/sql/health"
+    }
+  }
+}
+```
+
+#### 2. Use the included TestApi for a local walkthrough
+
+`tests/Mma.SqlStudio.TestApi` enables E2EE in its sample `Program.cs`. It creates a 3072-bit RSA key pair in memory, configures SqlStudio with that public key, and uses the matching private key in its SQL API controller. Its query, schema, and history endpoints require encrypted envelopes; its health endpoint is not encrypted. The test API persists history in its SQL database.
+
+Run the TestApi over HTTPS and make sure the `SqlStudioClient` `BaseAddress` in the test API points to that same running HTTPS origin (the port must match the selected Visual Studio/IIS Express or `dotnet run` profile). The sample key is regenerated at every process start, so restart requires a page reload. The TestApi's sample SQL Server connection string/database must also be available for query/schema/history verification; update it for your local environment rather than using sample credentials in production.
+
+After starting the app, open the SQL Studio page, load the schema, run `SELECT 1 AS E2EECheck;`, and open History. A successful query response, populated schema, and history entry exercise all three encrypted routes. Health status alone does not prove encryption because health is deliberately a plaintext GET.
+
+#### 3. Backend protocol: E2EE v1
+
+The backend must implement the following contract on the endpoints configured in `ApiConfig`. The SqlStudio proxy forwards each POST body and response body without inspecting their JSON contents. A compatible backend must never silently accept plaintext on an E2EE endpoint or fall back to plaintext after a cryptographic failure.
+
+| Proxy route | Backend endpoint | Decrypted operation | Expected encrypted response |
+| --- | --- | --- | --- |
+| `POST /query` | `QueryEndPoint` | `query.execute` with `query` | Standard `QueryResult` |
+| `POST /schema` | `SchemaEndPoint` | `schema.get` with `excludedSchemas` and `excludedObjects` | Schema array |
+| `POST /history` | `HistoryEndPoint` | `history.append` with `query` and `executedAt`, or `history.list` | Append acknowledgment, or `{ "items": [...], "tableName": "..." }` |
+
+Each request uses a new random AES-256-GCM key and a 12-byte nonce. The browser wraps the AES key with the configured RSA-OAEP/SHA-256 public key and encrypts UTF-8 JSON. AES-GCM ciphertext is the encrypted bytes followed by the 16-byte authentication tag, then Base64 encoded. The JSON request envelope is:
+
+```json
+{
+  "version": 1,
+  "algorithm": "RSA-OAEP-256+A256GCM",
+  "keyId": "configured-key-id",
+  "requestId": "random-guid",
+  "wrappedKey": "base64 RSA-OAEP ciphertext",
+  "iv": "base64 12-byte nonce",
+  "ciphertext": "base64 AES-GCM ciphertext and tag"
+}
+```
+
+The route-bound request additional authenticated data (UTF-8) is `Mma.SqlStudio.E2EE.v1|{keyId}|{requestId}|{route}|request`, where `route` is exactly `query`, `schema`, or `history`. The decrypted JSON includes the same `requestId`; operations are exactly `query.execute`, `schema.get`, `history.append`, or `history.list`. `schema.get` also carries the configured excluded names as hints. `history.append` carries the SQL text and an ISO-8601 `executedAt`; cookies and local storage are omitted.
+
+The backend encrypts the normal operation response with the same per-request AES key, a new 12-byte nonce, and UTF-8 AAD `Mma.SqlStudio.E2EE.v1|{keyId}|{requestId}|{route}|response`. Return this envelope as JSON and echo `version`, `keyId`, and `requestId` exactly:
+
+```json
+{
+  "version": 1,
+  "keyId": "configured-key-id",
+  "requestId": "same-request-guid",
+  "iv": "base64 12-byte nonce",
+  "ciphertext": "base64 AES-GCM ciphertext and tag"
+}
+```
+
+A `QueryResult` response has `success`, `isQuery`, `message`, and `rows`; schema responses use the regular schema model; history-list responses have `items` and `tableName`. Encrypt application-level errors in the same response envelope. For malformed/unauthenticated requests, reject without returning plaintext error details or logging the envelope contents.
+
+#### 4. Backend security and operations checklist
+
+- Validate version, algorithm, key ID, request/response route, Base64 fields, IV/tag lengths, decrypted JSON shape, operation, and matching request ID. Reject invalid authentication tags and oversized inputs.
+- Use an atomic replay cache for request IDs. In a multi-instance backend, share the cache across instances; retain old private keys only as long as needed for an intentional rotation window. The sample TestApi keeps request IDs in a process-local cache capped at 50,000 entries and rejects repeated IDs; it is for development/testing, not a production replay-cache design.
+- Keep the private key in a secret manager/HSM or equivalent backend-only store. All replicas receiving traffic for a key ID need access to the matching private key. During rotation, publish a new key ID/public key and coordinate backend key availability; open browser pages may still hold the old public key, so reload pages after deployment.
+- Do not log SQL, results, decrypted payloads, AES keys, private keys, or full envelopes. Avoid plaintext error bodies. Protect the page and script delivery with HTTPS, appropriate CSP, controlled dependencies, and XSS prevention.
+- Keep backend authorization and database permissions least-privileged. E2EE does not authenticate a SQL user by itself, prevent an authorized browser from viewing decrypted results, or encrypt history at rest.
+
+#### 5. Troubleshooting
+
+- **HTTP 400 / invalid envelope:** reload the page after restarting the TestApi (its key changes at startup); verify the browser's key ID and public JWK correspond to the backend private key; verify the exact protocol version, route AAD, and operation name.
+- **Replay rejection:** do not re-send a captured “Copy as PowerShell” request. It reuses the same `requestId` and ciphertext; trigger a new browser action to generate a fresh key, nonce, and request ID.
+- **Operation/route mismatch:** rebuild and redeploy both the package's static JavaScript and backend together, then clear the browser cache. The TestApi logs sanitized E2EE rejection reasons without logging SQL or ciphertext.
+- **Web Crypto unavailable:** use HTTPS and a supported browser. E2EE fails closed; it does not fall back to plaintext.
+- **Schema/history empty:** check backend endpoint configuration and database connectivity. Excluded-name options are hints; enforce authorization at the backend.
+
+The included TestApi demonstrates protocol interoperability, not production key custody or a separated trust boundary. Existing plaintext backends must be upgraded to this contract before E2EE is enabled.
 
 ### 3. Map Endpoints
 

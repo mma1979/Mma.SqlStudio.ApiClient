@@ -1,7 +1,10 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text.Json;
+using Dapper;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
-using Dapper;
-using System.Data;
+using Mma.SqlStudio.TestApi.Services;
 
 namespace Mma.SqlStudio.TestApi.Controllers
 {
@@ -10,59 +13,79 @@ namespace Mma.SqlStudio.TestApi.Controllers
     public class SqlApiController : ControllerBase
     {
         private readonly string _connectionString = "data source=localhost;initial catalog=LandFeesDB;persist security info=True;TrustServerCertificate=True; user id=sa;password=Abc@1234;MultipleActiveResultSets=True;Max Pool Size=200;";
+        private readonly TestApiEncryptionService _encryption;
+        private readonly TestQueryHistoryStore _history;
+        private readonly ILogger<SqlApiController> _logger;
 
-        [HttpGet("schema")]
-        public async Task<IActionResult> GetSchema()
+        public SqlApiController(
+            TestApiEncryptionService encryption,
+            TestQueryHistoryStore history,
+            ILogger<SqlApiController> logger)
         {
-            using IDbConnection db = new SqlConnection(_connectionString);
-            var sql = @"
-                SELECT 
-                    TABLE_SCHEMA as SchemaName, 
-                    TABLE_NAME as ObjectName, 
-                    TABLE_TYPE as ObjectType 
-                FROM INFORMATION_SCHEMA.TABLES
-                UNION ALL
-                SELECT 
-                    ROUTINE_SCHEMA as SchemaName,
-                    ROUTINE_NAME as ObjectName,
-                    'PROCEDURE' as ObjectType
-                FROM INFORMATION_SCHEMA.ROUTINES
-                WHERE ROUTINE_TYPE = 'PROCEDURE'
-                ORDER BY SchemaName, ObjectName";
-
-            try
-            {
-                var results = await db.QueryAsync<SchemaItem>(sql);
-                var nodes = results.GroupBy(r => r.SchemaName)
-                    .Select(g => new
-                    {
-                        Name = g.Key,
-                        Children = new[]
-                        {
-                            new { Name = "Tables", Objects = g.Where(x => x.ObjectType == "BASE TABLE").Select(x => x.ObjectName).ToList() },
-                            new { Name = "Views", Objects = g.Where(x => x.ObjectType == "VIEW").Select(x => x.ObjectName).ToList() },
-                            new { Name = "Procedures", Objects = g.Where(x => x.ObjectType == "PROCEDURE").Select(x => x.ObjectName).ToList() }
-                        }
-                    }).ToList();
-                return Ok(nodes);
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(ex.Message);
-            }
+            _encryption = encryption;
+            _history = history;
+            _logger = logger;
         }
+
+        [HttpPost("schema")]
+        public Task<IActionResult> GetSchema([FromBody] JsonElement envelope) =>
+            HandleEncryptedAsync(envelope, "schema", ["schema.get"], async payload =>
+            {
+                
+                var excludedSchemas = ReadStringSet(payload, "excludedSchemas");
+                var excludedObjects = ReadStringSet(payload, "excludedObjects");
+                return await GetSchemaDataAsync(excludedSchemas, excludedObjects);
+            });
 
         [HttpPost("query")]
-        public async Task<IActionResult> ExecuteQuery([FromBody] QueryRequest request)
-        {
-            return await ProcessQuery(request.Query, true);
-        }
+        public Task<IActionResult> ExecuteQuery([FromBody] JsonElement envelope) =>
+            HandleEncryptedAsync(envelope, "query", ["query.execute"], async payload =>
+            {
+                var query = payload.GetProperty("query").GetString() ?? "";
+                return await ExecuteSqlAsync(query);
+            });
 
+        // Keep the conventional execute route, but require the same encrypted query envelope.
         [HttpPost("execute")]
-        public async Task<IActionResult> ExecuteCommand([FromBody] QueryRequest request)
-        {
-            return await ProcessQuery(request.Query, false);
-        }
+        public Task<IActionResult> ExecuteCommand([FromBody] JsonElement envelope) =>
+            HandleEncryptedAsync(envelope, "query", ["query.execute"], async payload =>
+            {
+                var query = payload.GetProperty("query").GetString() ?? "";
+                return await ExecuteSqlAsync(query);
+            });
+
+        [HttpPost("history")]
+        public Task<IActionResult> History([FromBody] JsonElement envelope) =>
+            HandleEncryptedAsync(envelope, "history", ["history.list", "history.append"], async payload =>
+            {
+                var operation = payload.GetProperty("operation").GetString();
+                if (operation == "history.append")
+                {
+                    var query = payload.GetProperty("query").GetString() ?? "";
+                    var executedAt = payload.GetProperty("executedAt").GetDateTimeOffset().UtcDateTime;
+                    try
+                    {
+                        await _history.AppendAsync(query, executedAt);
+                        return new { success = true };
+                    }
+                    catch (Exception)
+                    {
+                        _logger.LogWarning("Unable to persist encrypted query history.");
+                        return new { success = false };
+                    }
+                }
+
+                try
+                {
+                    var items = await _history.GetRecentAsync();
+                    return new { items, tableName = "__TestQueryHistory" };
+                }
+                catch (Exception)
+                {
+                    _logger.LogWarning("Unable to read encrypted query history.");
+                    return new { items = Array.Empty<TestQueryHistoryStore.HistoryEntry>(), tableName = "__TestQueryHistory" };
+                }
+            });
 
         [HttpGet("health")]
         public async Task<IActionResult> Health()
@@ -79,7 +102,114 @@ namespace Mma.SqlStudio.TestApi.Controllers
             }
         }
 
-        private async Task<IActionResult> ProcessQuery(string sql, bool isQuery)
+        private async Task<IActionResult> HandleEncryptedAsync(
+            JsonElement envelope,
+            string route,
+            string[] allowedOperations,
+            Func<JsonElement, Task<object>> createResponse)
+        {
+            TestApiEncryptionService.DecryptedRequest decrypted;
+            try
+            {
+                decrypted = _encryption.Decrypt(envelope, route);
+            }
+            catch (InvalidDataException exception)
+            {
+                _logger.LogWarning("Rejected E2EE {Route} envelope: {Reason}", route, exception.Message);
+                return BadRequest();
+            }
+            catch (Exception exception) when (exception is CryptographicException or JsonException or
+                                                FormatException or InvalidOperationException or
+                                                ArgumentException or NullReferenceException)
+            {
+                _logger.LogWarning("Rejected E2EE {Route} envelope ({FailureType}).", route, exception.GetType().Name);
+                return BadRequest();
+            }
+
+            using (decrypted)
+            {
+                var payload = decrypted.Payload.RootElement;
+                if (!payload.TryGetProperty("operation", out var operationElement) ||
+                    operationElement.ValueKind != JsonValueKind.String ||
+                    !allowedOperations.Contains(operationElement.GetString(), StringComparer.Ordinal))
+                {
+                    _logger.LogWarning("Rejected E2EE {Route} payload because its operation does not match the endpoint.", route);
+                    return BadRequest();
+                }
+
+                try
+                {
+                    var clearResponse = await createResponse(payload);
+                    return Ok(_encryption.EncryptResponse(clearResponse, decrypted));
+                }
+                catch (Exception)
+                {
+                    _logger.LogWarning("Encrypted {Route} operation failed.", route);
+                    return StatusCode(StatusCodes.Status500InternalServerError);
+                }
+            }
+        }
+
+        private static HashSet<string> ReadStringSet(JsonElement payload, string propertyName)
+        {
+            if (!payload.TryGetProperty(propertyName, out var values) || values.ValueKind != JsonValueKind.Array)
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            return values.EnumerateArray()
+                .Where(value => value.ValueKind == JsonValueKind.String)
+                .Select(value => value.GetString()!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private async Task<List<SchemaNode>> GetSchemaDataAsync(HashSet<string> excludedSchemas, HashSet<string> excludedObjects)
+        {
+            try
+            {
+                using IDbConnection db = new SqlConnection(_connectionString);
+                const string sql = @"
+                    SELECT TABLE_SCHEMA as SchemaName, TABLE_NAME as ObjectName, TABLE_TYPE as ObjectType
+                    FROM INFORMATION_SCHEMA.TABLES
+                    UNION ALL
+                    SELECT ROUTINE_SCHEMA as SchemaName, ROUTINE_NAME as ObjectName, 'PROCEDURE' as ObjectType
+                    FROM INFORMATION_SCHEMA.ROUTINES
+                    WHERE ROUTINE_TYPE = 'PROCEDURE'
+                    ORDER BY SchemaName, ObjectName";
+
+                var results = await db.QueryAsync<SchemaItem>(sql);
+                return results
+                    .Where(row => !excludedSchemas.Contains(row.SchemaName))
+                    .GroupBy(row => row.SchemaName)
+                    .Select(group => new SchemaNode
+                    {
+                        Name = group.Key,
+                        Children = new List<CategoryNode>
+                        {
+                            CreateCategory("Tables", group.Where(row => row.ObjectType == "BASE TABLE"), excludedObjects),
+                            CreateCategory("Views", group.Where(row => row.ObjectType == "VIEW"), excludedObjects),
+                            CreateCategory("Procedures", group.Where(row => row.ObjectType == "PROCEDURE"), excludedObjects)
+                        }
+                    }).ToList();
+            }
+            catch (Exception)
+            {
+                _logger.LogWarning("Unable to load schema for encrypted request.");
+                return new List<SchemaNode>();
+            }
+        }
+
+        private static CategoryNode CreateCategory(
+            string name,
+            IEnumerable<SchemaItem> entries,
+            HashSet<string> excludedObjects) =>
+            new()
+            {
+                Name = name,
+                Objects = entries.Select(entry => entry.ObjectName)
+                    .Where(objectName => !excludedObjects.Contains(objectName))
+                    .ToList()
+            };
+
+        private async Task<QueryResult> ExecuteSqlAsync(string sql)
         {
             var result = new QueryResult();
             try
@@ -89,65 +219,70 @@ namespace Mma.SqlStudio.TestApi.Controllers
 
                 using var cmd = new SqlCommand(sql, conn);
                 using var reader = await cmd.ExecuteReaderAsync();
-
                 if (reader.FieldCount > 0)
                 {
-                    var dt = new DataTable();
-                    dt.Load(reader);
-
-                    var rows = new List<Dictionary<string, object>>();
-                    var columns = dt.Columns.Cast<DataColumn>().Select(c => c.ColumnName!).ToList();
-
-                    foreach (DataRow row in dt.Rows)
+                    var table = new DataTable();
+                    table.Load(reader);
+                    var rows = new List<Dictionary<string, object?>>();
+                    var columns = table.Columns.Cast<DataColumn>().Select(column => column.ColumnName!).ToList();
+                    foreach (DataRow row in table.Rows)
                     {
-                        var dict = new Dictionary<string, object>();
-                        foreach (var col in columns)
-                        {
-                            dict[col] = row[col] == DBNull.Value ? null : row[col];
-                        }
-                        rows.Add(dict);
+                        var values = new Dictionary<string, object?>();
+                        foreach (var column in columns)
+                            values[column] = row[column] == DBNull.Value ? null : row[column];
+                        rows.Add(values);
                     }
 
                     result.Rows = rows;
-                    result.Message = $"Success: {dt.Rows.Count} rows returned.";
+                    result.Message = $"Success: {table.Rows.Count} rows returned.";
                     result.IsQuery = true;
                 }
                 else
                 {
-                    int affected = reader.RecordsAffected;
-                    result.Message = $"Success: Command executed. {affected} rows affected.";
-                    result.IsQuery = false;
+                    result.Message = $"Success: Command executed. {reader.RecordsAffected} rows affected.";
                 }
                 result.Success = true;
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
                 result.Success = false;
-                result.Message = "Error: " + ex.Message;
+                result.Message = "Error: " + exception.Message;
             }
-            return Ok(result);
+            return result;
         }
 
-        private class SchemaItem
+        private sealed class SchemaItem
         {
             public string SchemaName { get; set; } = "";
             public string ObjectName { get; set; } = "";
             public string ObjectType { get; set; } = "";
         }
 
-        public class QueryRequest
+        private sealed class SchemaNode
         {
-            public string Query { get; set; } = "";
-            public string? Cookies { get; set; }
-            public string? LocalStorage { get; set; }
+            public string Name { get; set; } = "";
+            public List<CategoryNode> Children { get; set; } = new();
         }
 
-        public class QueryResult
+        private sealed class CategoryNode
+        {
+            public string Name { get; set; } = "";
+            public List<string> Objects { get; set; } = new();
+
+            public CategoryNode() { }
+            public CategoryNode(string name, List<string> objects)
+            {
+                Name = name;
+                Objects = objects;
+            }
+        }
+
+        private sealed class QueryResult
         {
             public bool Success { get; set; }
             public bool IsQuery { get; set; }
             public string Message { get; set; } = "";
-            public List<Dictionary<string, object>> Rows { get; set; } = new();
+            public List<Dictionary<string, object?>> Rows { get; set; } = new();
         }
     }
 }

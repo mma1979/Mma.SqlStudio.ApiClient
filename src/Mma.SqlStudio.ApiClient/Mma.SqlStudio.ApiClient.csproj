@@ -11,7 +11,7 @@
 		<!-- NuGet Package Properties -->
 		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 		<PackageId>Mma.SqlStudio.ApiClient</PackageId>
-		<Version>1.4.1</Version>
+		<Version>1.5.0</Version>
 		<Authors>Mohammed Abdelhay</Authors>
 		<Description>A configurable Blazor Razor Class Library providing a SQL Server object explorer and query editor.</Description>
 		<PackageLicenseFile>LICENSE</PackageLicenseFile>
@@ -20,9 +20,6 @@
 		<PackageProjectUrl>https://github.com/mma1979/Mma.SqlStudio.ApiClient</PackageProjectUrl>
 		<PackageOutputPath>.nuget</PackageOutputPath>
 	</PropertyGroup>
-
-	<ItemGroup>
-	</ItemGroup>
 
 	<ItemGroup>
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
@@ -36,6 +33,10 @@
 		<None Include="README.md" Pack="true" PackagePath="\" />
 		<None Include="LICENSE" Pack="true" PackagePath="\" />
 		<None Include="icon.png" Pack="true" PackagePath="\" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
 	</ItemGroup>
 
 </Project>

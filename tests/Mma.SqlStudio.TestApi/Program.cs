@@ -1,7 +1,11 @@
 using Mma.SqlStudio.ApiClient.Extensions;
-
+using Mma.SqlStudio.TestApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+var testEncryption = new TestApiEncryptionService();
+
+builder.Services.AddSingleton(testEncryption);
+builder.Services.AddSingleton<TestQueryHistoryStore>();
 
 // Add services to the container.
 
@@ -12,7 +16,7 @@ builder.Services.AddRazorPages();
 
 builder.Services.AddHttpClient("SqlStudioClient", client =>
 {
-    client.BaseAddress = new Uri("https://localhost:7211");
+    client.BaseAddress = new Uri("https://localhost:44396");
 });
 
 builder.Services.AddSqlStudio(options =>
@@ -30,8 +34,13 @@ builder.Services.AddSqlStudio(options =>
         QueryEndPoint = "api/sql/query",
         ExecuteEndPoint = "api/sql/execute",
         SchemaEndPoint = "api/sql/schema",
+        HistoryEndPoint = "api/sql/history",
         HealthEndpoint = "api/sql/health"
     };
+
+    options.Encryption.Enabled = true;
+    options.Encryption.BackendKeyId = testEncryption.KeyId;
+    options.Encryption.BackendPublicKeyJwk = testEncryption.PublicKeyJwk;
 
     // Example Auth Filter: HTTP Basic Auth (admin:password)
     options.AuthFilter = ctx =>
@@ -55,6 +64,7 @@ builder.Services.AddSqlStudio(options =>
 });
 
 var app = builder.Build();
+app.Lifetime.ApplicationStopping.Register(testEncryption.Dispose);
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

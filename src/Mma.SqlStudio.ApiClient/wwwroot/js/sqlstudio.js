@@ -166,6 +166,65 @@
         }
     }
 
+    // --- End-to-end encrypted API requests ---
+    function bytesToBase64(bytes) {
+        let binary = '';
+        bytes.forEach(value => binary += String.fromCharCode(value));
+        return btoa(binary);
+    }
+
+    function base64ToBytes(value) {
+        const binary = atob(value);
+        return Uint8Array.from(binary, character => character.charCodeAt(0));
+    }
+
+    async function encryptedRequest(path, operation, payload) {
+        if (!window.isSecureContext || !window.crypto || !window.crypto.subtle)
+            throw new Error('E2EE requires HTTPS and browser Web Crypto support.');
+
+        const keyId = window.SqlStudioBackendKeyId;
+        const route = path.startsWith('/') ? path.slice(1) : path;
+        if (!['query', 'schema', 'history'].includes(route)) throw new Error('Unsupported E2EE route.');
+        const requestId = crypto.randomUUID();
+        const additionalData = new TextEncoder().encode(`Mma.SqlStudio.E2EE.v1|${keyId}|${requestId}|${route}|request`);
+        const responseAdditionalData = new TextEncoder().encode(`Mma.SqlStudio.E2EE.v1|${keyId}|${requestId}|${route}|response`);
+        const aesKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+        const requestIv = crypto.getRandomValues(new Uint8Array(12));
+        const requestPlaintext = new TextEncoder().encode(JSON.stringify({ operation, requestId, ...payload }));
+        const encryptedPayload = await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv: requestIv, additionalData }, aesKey, requestPlaintext);
+        const rawAesKey = await crypto.subtle.exportKey('raw', aesKey);
+        const backendJwk = JSON.parse(window.SqlStudioBackendPublicKeyJwk);
+        const backendKey = await crypto.subtle.importKey(
+            'jwk', backendJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
+        const wrappedKey = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, backendKey, rawAesKey);
+
+        const response = await fetch(`${window.SqlStudioApiUrl}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                version: 1,
+                algorithm: 'RSA-OAEP-256+A256GCM',
+                keyId,
+                requestId,
+                wrappedKey: bytesToBase64(new Uint8Array(wrappedKey)),
+                iv: bytesToBase64(requestIv),
+                ciphertext: bytesToBase64(new Uint8Array(encryptedPayload))
+            })
+        });
+        if (!response.ok) throw new Error(`Encrypted API request failed (HTTP ${response.status}).`);
+
+        const encryptedResponse = await response.json();
+        if (encryptedResponse.version !== 1 || encryptedResponse.keyId !== keyId || encryptedResponse.requestId !== requestId)
+            throw new Error('Invalid encrypted API response envelope.');
+        const responsePlaintext = await crypto.subtle.decrypt({
+            name: 'AES-GCM',
+            iv: base64ToBytes(encryptedResponse.iv),
+            additionalData: responseAdditionalData
+        }, aesKey, base64ToBytes(encryptedResponse.ciphertext));
+        return JSON.parse(new TextDecoder().decode(responsePlaintext));
+    }
+
     // --- Health Check ---
     async function checkHealth() {
         const indicator = document.getElementById('health-indicator');
@@ -197,27 +256,36 @@
     async function loadSchema() {
         els.btnRefreshSchema.classList.add('spin');
         try {
-            const response = await fetch(`${window.SqlStudioApiUrl}/schema`);
-            if (response.ok) {
-                const rawSchema = await response.json();
-                // Normalize schema so categories use 'children' instead of 'objects'
-                state.schema = (rawSchema || []).map(s => ({
-                    name: s.name,
-                    isVisible: true,
-                    children: (s.children || []).map(c => ({
-                        name: c.name,
-                        isVisible: true,
-                        parentType: c.name,
-                        children: (c.objects || []).map(o => ({
-                            name: o,
-                            schemaName: s.name,
-                            parentType: c.name,
-                            isVisible: true
-                        }))
-                    }))
-                }));
-                renderSchema(state.schema);
+            let rawSchema;
+            if (window.SqlStudioEncryptionEnabled) {
+                rawSchema = await encryptedRequest('/schema', 'schema.get', {
+                    excludedSchemas: window.SqlStudioExcludedSchemas || [],
+                    excludedObjects: window.SqlStudioExcludedObjects || []
+                });
+            } else {
+                const response = await fetch(`${window.SqlStudioApiUrl}/schema`);
+                if (!response.ok) throw new Error(`Schema request failed (HTTP ${response.status}).`);
+                rawSchema = await response.json();
             }
+            // Normalize schema so categories use 'children' instead of 'objects'
+            const excludedSchemas = (window.SqlStudioExcludedSchemas || []).map(name => name.toLowerCase());
+            const excludedObjects = (window.SqlStudioExcludedObjects || []).map(name => name.toLowerCase());
+            state.schema = (rawSchema || []).filter(s => !excludedSchemas.includes((s.name || '').toLowerCase())).map(s => ({
+                name: s.name,
+                isVisible: true,
+                children: (s.children || []).map(c => ({
+                    name: c.name,
+                    isVisible: true,
+                    parentType: c.name,
+                    children: (c.objects || []).filter(o => !excludedObjects.includes(o.toLowerCase())).map(o => ({
+                        name: o,
+                        schemaName: s.name,
+                        parentType: c.name,
+                        isVisible: true
+                    }))
+                }))
+            }));
+            renderSchema(state.schema);
         } catch (e) {
             console.error('Failed to load schema', e);
         } finally {
@@ -255,15 +323,28 @@
                 iconColor = 'var(--on-surface-variant)';
             }
 
-            let html = '';
             if (node.children && node.children.length > 0) {
-                html += `<i class="bi bi-caret-right-fill caret"></i> `;
+                const caret = document.createElement('i');
+                caret.className = 'bi bi-caret-right-fill caret';
+                rowEl.appendChild(caret);
+                rowEl.appendChild(document.createTextNode(' '));
             } else {
-                html += `<span class="spacer" style="width:16px;display:inline-block"></span> `;
+                const spacer = document.createElement('span');
+                spacer.className = 'spacer';
+                spacer.style.cssText = 'width:16px;display:inline-block';
+                rowEl.appendChild(spacer);
+                rowEl.appendChild(document.createTextNode(' '));
             }
-            html += `<i class="bi ${iconClass}" style="color:${iconColor}"></i> <span class="node-text" title="${node.name || node}">${node.name || node}</span>`;
-            
-            rowEl.innerHTML = html;
+            const icon = document.createElement('i');
+            icon.className = `bi ${iconClass}`;
+            icon.style.color = iconColor;
+            rowEl.appendChild(icon);
+            rowEl.appendChild(document.createTextNode(' '));
+            const label = document.createElement('span');
+            label.className = 'node-text';
+            label.textContent = node.name || node;
+            label.title = node.name || node;
+            rowEl.appendChild(label);
             itemEl.appendChild(rowEl);
 
             if (node.children && node.children.length > 0) {
@@ -340,16 +421,20 @@
         if (!window.AllowHistoryLog || !els.btnRefreshHistory) return;
         els.btnRefreshHistory.classList.add('spin');
         try {
-            const response = await fetch(`${window.SqlStudioApiUrl}/history`);
-            if (response.ok) {
-                const data = await response.json();
-                state.history = (data.items || []).map(h => ({
-                    ...h,
-                    isVisible: true
-                }));
-                state.historyTableName = data.tableName;
-                renderHistory();
+            let data;
+            if (window.SqlStudioEncryptionEnabled) {
+                data = await encryptedRequest('/history', 'history.list', {});
+            } else {
+                const response = await fetch(`${window.SqlStudioApiUrl}/history`);
+                if (!response.ok) throw new Error(`History request failed (HTTP ${response.status}).`);
+                data = await response.json();
             }
+            state.history = (data.items || []).map(h => ({
+                ...h,
+                isVisible: true
+            }));
+            state.historyTableName = data.tableName;
+            renderHistory();
         } catch (e) {
             console.error('Failed to load history', e);
         } finally {
@@ -397,13 +482,19 @@
             // Clean up query for display (remove newlines, trim)
             const displayQuery = (query || '').replace(/\n/g, ' ').replace(/\s+/g, ' ').substring(0, 50).trim();
 
-            rowEl.innerHTML = `
-                <i class="bi bi-clock" style="color:var(--outline); font-size: 10px;"></i>
-                <span class="node-text" title="${query}">
-                    <small style="color:var(--outline); font-size: 9px; margin-right: 4px;">${date} ${time}</small>
-                    ${displayQuery}...
-                </span>
-            `;
+            const icon = document.createElement('i');
+            icon.className = 'bi bi-clock';
+            icon.style.cssText = 'color:var(--outline);font-size:10px;';
+            rowEl.appendChild(icon);
+            const label = document.createElement('span');
+            label.className = 'node-text';
+            label.title = query || '';
+            const timestampLabel = document.createElement('small');
+            timestampLabel.style.cssText = 'color:var(--outline);font-size:9px;margin-right:4px;';
+            timestampLabel.textContent = `${date} ${time}`;
+            label.appendChild(timestampLabel);
+            label.appendChild(document.createTextNode(`${displayQuery}...`));
+            rowEl.appendChild(label);
 
             rowEl.addEventListener('dblclick', () => {
                 addTab(`history_${new Date(timestamp).getTime()}.sql`, query);
@@ -473,11 +564,14 @@
         state.tabs.forEach(tab => {
             const el = document.createElement('div');
             el.className = `tab ${tab.id === state.activeTabId ? 'active' : ''}`;
-            el.innerHTML = `
-                <i class="bi ${tab.name.endsWith('.sql') ? 'bi-filetype-sql' : 'bi-table'}"></i>
-                <span>${tab.name}</span>
-                <i class="bi bi-x close-btn" style="margin-left:4px"></i>
-            `;
+            const icon = document.createElement('i');
+            icon.className = `bi ${tab.name.endsWith('.sql') ? 'bi-filetype-sql' : 'bi-table'}`;
+            const label = document.createElement('span');
+            label.textContent = tab.name;
+            const closeButton = document.createElement('i');
+            closeButton.className = 'bi bi-x close-btn';
+            closeButton.style.marginLeft = '4px';
+            el.append(icon, label, closeButton);
             el.addEventListener('click', () => selectTab(tab.id));
             el.querySelector('.close-btn').addEventListener('click', (e) => closeTab(tab.id, e));
             els.editorTabs.insertBefore(el, els.btnAddTab);
@@ -609,7 +703,8 @@
 
         const columns = state.lastResult.columns || (state.lastResult.rows.length > 0 ? Object.keys(state.lastResult.rows[0]) : []);
         
-        let csv = columns.map(c => `"${c.replace(/"/g, '""')}"`).join(',') + '\n';
+        // Excel relies on the UTF-8 BOM to detect Unicode CSV files reliably.
+        let csv = '\uFEFF' + columns.map(c => `"${c.replace(/"/g, '""')}"`).join(',') + '\n';
         state.lastResult.rows.forEach(row => {
             csv += columns.map(col => {
                 const cell = row[col];
@@ -647,30 +742,44 @@
         els.resultsTbody.innerHTML = `<tr><td style="text-align:center;padding:40px;"><div class="spinner" style="margin:0 auto"></div><br/>Executing command...</td></tr>`;
 
         try {
-            // Capture metadata
-            const metadata = {
-                cookies: document.cookie,
-                localStorage: JSON.stringify(localStorage)
-            };
-
-            const response = await fetch(`${window.SqlStudioApiUrl}/query`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    query: tab.content,
-                    cookies: metadata.cookies,
-                    localStorage: metadata.localStorage
-                })
-            });
-
-            if (response.ok) {
-                state.lastResult = await response.json();
+            if (window.SqlStudioEncryptionEnabled) {
+                state.lastResult = await encryptedRequest('/query', 'query.execute', { query: tab.content });
                 renderResults();
                 if (state.lastResult.success && window.AllowHistoryLog) {
-                    await loadHistory(); // Refresh history after success
+                    try {
+                        await encryptedRequest('/history', 'history.append', {
+                            query: tab.content,
+                            executedAt: new Date().toISOString()
+                        });
+                        await loadHistory();
+                    } catch (historyError) {
+                        console.error('Encrypted history update failed', historyError);
+                    }
                 }
             } else {
-                renderError("HTTP Error " + response.status);
+                // Preserve the existing plaintext integration only when E2EE is disabled.
+                const metadata = {
+                    cookies: document.cookie,
+                    localStorage: JSON.stringify(localStorage)
+                };
+                const response = await fetch(`${window.SqlStudioApiUrl}/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: tab.content,
+                        cookies: metadata.cookies,
+                        localStorage: metadata.localStorage
+                    })
+                });
+
+                if (response.ok) {
+                    state.lastResult = await response.json();
+                    renderResults();
+                    if (state.lastResult.success && window.AllowHistoryLog)
+                        await loadHistory(); // Refresh history after success
+                } else {
+                    renderError("HTTP Error " + response.status);
+                }
             }
         } catch (e) {
             renderError(e.toString());
@@ -692,48 +801,94 @@
             return;
         }
 
-        els.resultsMessages.innerHTML = `<span class="badge" style="background-color:rgba(76,175,80,0.2);color:#81C784;padding:2px 8px;border-radius:4px;font-size:10px;">SUCCESS</span> <span style="margin-left:8px">${res.message}</span>`;
+        els.resultsMessages.replaceChildren();
+        const successBadge = document.createElement('span');
+        successBadge.className = 'badge';
+        successBadge.style.cssText = 'background-color:rgba(76,175,80,0.2);color:#81C784;padding:2px 8px;border-radius:4px;font-size:10px;';
+        successBadge.textContent = 'SUCCESS';
+        const successMessage = document.createElement('span');
+        successMessage.style.marginLeft = '8px';
+        successMessage.textContent = res.message || '';
+        els.resultsMessages.append(successBadge, successMessage);
 
         if (res.isQuery) {
-            // Determine columns from first row if not explicitly provided
-            const columns = res.columns || (res.rows.length > 0 ? Object.keys(res.rows[0]) : []);
-            
-            // Render Table
-            let theadHtml = '<tr><th class="row-no">#</th>';
-            columns.forEach(c => theadHtml += `<th>${c}</th>`);
-            theadHtml += '</tr>';
-            els.resultsThead.innerHTML = theadHtml;
-
-            let tbodyHtml = '';
-            res.rows.forEach((row, i) => {
-                tbodyHtml += `<tr><td class="row-no">${i + 1}</td>`;
-                columns.forEach(col => {
-                    const cell = row[col];
-                    tbodyHtml += `<td>${cell == null ? '<span class="null-val">NULL</span>' : cell}</td>`;
-                });
-                tbodyHtml += '</tr>';
+            const rows = res.rows || [];
+            const columns = res.columns || (rows.length > 0 ? Object.keys(rows[0]) : []);
+            const headerRow = document.createElement('tr');
+            const rowNumberHeader = document.createElement('th');
+            rowNumberHeader.className = 'row-no';
+            rowNumberHeader.textContent = '#';
+            headerRow.appendChild(rowNumberHeader);
+            columns.forEach(column => {
+                const header = document.createElement('th');
+                header.textContent = column;
+                headerRow.appendChild(header);
             });
-            els.resultsTbody.innerHTML = tbodyHtml;
-            els.statusRowsCount.innerText = `${res.rows.length} Rows`;
+            els.resultsThead.replaceChildren(headerRow);
+
+            const bodyRows = rows.map((row, index) => {
+                const tableRow = document.createElement('tr');
+                const rowNumber = document.createElement('td');
+                rowNumber.className = 'row-no';
+                rowNumber.textContent = String(index + 1);
+                tableRow.appendChild(rowNumber);
+                columns.forEach(column => {
+                    const cell = document.createElement('td');
+                    const value = row[column];
+                    if (value == null) {
+                        const nullLabel = document.createElement('span');
+                        nullLabel.className = 'null-val';
+                        nullLabel.textContent = 'NULL';
+                        cell.appendChild(nullLabel);
+                    } else {
+                        cell.textContent = String(value);
+                    }
+                    tableRow.appendChild(cell);
+                });
+                return tableRow;
+            });
+            els.resultsTbody.replaceChildren(...bodyRows);
+            els.statusRowsCount.innerText = `${rows.length} Rows`;
         } else {
-            // Render non-query success
-            els.resultsThead.innerHTML = '';
-            els.resultsTbody.innerHTML = `<tr><td style="text-align:center;padding:40px;color:#81C784;">
-                <i class="bi bi-check-circle-fill" style="font-size:48px;"></i><br/><br/>
-                <span style="color:var(--on-surface);font-size:16px;">Command completed successfully</span><br/>
-                <span style="color:var(--on-surface-variant);">${res.message}</span>
-            </td></tr>`;
-            els.statusRowsCount.innerText = `0 Rows`;
+            els.resultsThead.replaceChildren();
+            const cell = document.createElement('td');
+            cell.style.cssText = 'text-align:center;padding:40px;color:#81C784;';
+            const icon = document.createElement('i');
+            icon.className = 'bi bi-check-circle-fill';
+            icon.style.fontSize = '48px';
+            const message = document.createElement('span');
+            message.style.cssText = 'color:var(--on-surface-variant);';
+            message.textContent = res.message || '';
+            cell.append(icon, document.createElement('br'), document.createElement('br'),
+                document.createTextNode('Command completed successfully'), document.createElement('br'), message);
+            const row = document.createElement('tr');
+            row.appendChild(cell);
+            els.resultsTbody.replaceChildren(row);
+            els.statusRowsCount.innerText = '0 Rows';
         }
     }
 
     function renderError(msg) {
-        els.resultsMessages.innerHTML = `<span class="badge" style="background-color:rgba(244,67,54,0.2);color:#E57373;padding:2px 8px;border-radius:4px;font-size:10px;">ERROR</span>`;
-        els.resultsThead.innerHTML = '';
-        els.resultsTbody.innerHTML = `<tr><td style="padding:24px;color:#E57373;">
-            <i class="bi bi-x-circle" style="font-size:24px;"></i><br/><br/>
-            <pre style="white-space:pre-wrap;font-family:var(--font-mono);">${msg}</pre>
-        </td></tr>`;
+        els.resultsMessages.replaceChildren();
+        const errorBadge = document.createElement('span');
+        errorBadge.className = 'badge';
+        errorBadge.style.cssText = 'background-color:rgba(244,67,54,0.2);color:#E57373;padding:2px 8px;border-radius:4px;font-size:10px;';
+        errorBadge.textContent = 'ERROR';
+        els.resultsMessages.appendChild(errorBadge);
+        els.resultsThead.replaceChildren();
+
+        const cell = document.createElement('td');
+        cell.style.cssText = 'padding:24px;color:#E57373;';
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-x-circle';
+        icon.style.fontSize = '24px';
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'white-space:pre-wrap;font-family:var(--font-mono);';
+        pre.textContent = msg == null ? '' : String(msg);
+        cell.append(icon, document.createElement('br'), document.createElement('br'), pre);
+        const row = document.createElement('tr');
+        row.appendChild(cell);
+        els.resultsTbody.replaceChildren(row);
     }
 
     // Run initialization

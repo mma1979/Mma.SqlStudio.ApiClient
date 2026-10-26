@@ -19,6 +19,25 @@ namespace Mma.SqlStudio.ApiClient.Extensions
                 group.AddEndpointFilter(new Filters.SqlStudioAuthEndpointFilter(options.AuthFilter, options.UnauthorizedRedirectUrl));
             }
 
+            if (options.Encryption.Enabled)
+            {
+                group.MapPost("/query", (HttpContext context, EncryptedApiProxy proxy) =>
+                    proxy.ForwardAsync(context, options.ApiConfig.QueryEndPoint));
+                group.MapPost("/schema", (HttpContext context, EncryptedApiProxy proxy) =>
+                    proxy.ForwardAsync(context, options.ApiConfig.SchemaEndPoint));
+                if (options.AllowHistoryLog)
+                {
+                    group.MapPost("/history", (HttpContext context, EncryptedApiProxy proxy) =>
+                        proxy.ForwardAsync(context, options.ApiConfig.HistoryEndPoint));
+                }
+                group.MapGet("/health", async (SchemaService schemaService) =>
+                {
+                    var isHealthy = await schemaService.CheckHealthAsync();
+                    return Results.Ok(new { healthy = isHealthy });
+                });
+                return endpoints;
+            }
+
             group.MapGet("/schema", async (SchemaService schemaService) =>
             {
                 var schema = await schemaService.GetSchemaAsync();
